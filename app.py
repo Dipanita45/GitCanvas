@@ -65,6 +65,19 @@ st.markdown("""
         background: #222;
         border-color: #555;
     }
+
+    /* Keep the long tab row usable on smaller screens */
+    div[data-baseweb="tab-list"] {
+        overflow-x: auto;
+        overflow-y: hidden;
+        flex-wrap: nowrap;
+        scrollbar-width: thin;
+    }
+    div[data-baseweb="tab-list"] button {
+        white-space: nowrap;
+        flex: 0 0 auto;
+    }
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -356,19 +369,18 @@ if custom_colors:
     current_theme_opts.update(custom_colors)
 
 
-# --- Layout: Tabs ---
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
     "Main Stats", "Languages", "Top Repositories", "Contributions",
     "🔥 GitHub Streak", "🔗 Social Links", "Icons & Badges",
     "🔥 AI Roast", "Recent Activity", "✨ Visual Elements",
-    "🏆 Trophy", "🎨 Theme Gallery", "📅 Calendar Heatmap"    # ← NEW TAB
+    "🏆 Trophy", "🎨 Theme Gallery", "📅 Calendar Heatmap"
 ])
 
 def show_code_area(code_content, label="Markdown Code"):
     st.markdown(f"**{label}** (Copy below)")
     st.text_area(label, value=code_content, height=100, label_visibility="collapsed")
 
-def render_tab(svg_bytes, endpoint, username, selected_theme, custom_colors, hide_params=None, code_template=None, excluded_languages=None, output_format="Markdown"):
+def render_tab(svg_bytes, endpoint, username, selected_theme, custom_colors, hide_params=None, code_template=None, excluded_languages=None, output_format="Markdown", extra_params=None):
     col1, col2 = st.columns([1.5, 1])
     with col1:
         # Render SVG
@@ -465,6 +477,16 @@ def render_tab(svg_bytes, endpoint, username, selected_theme, custom_colors, hid
             params.append(f"theme={selected_theme}")
         for k, v in custom_colors.items():
             params.append(f"{k}={v.replace('#', '')}")
+
+        if extra_params:
+            for key, value in extra_params.items():
+                if value is None or value == "":
+                    continue
+                if isinstance(value, bool):
+                    if value:
+                        params.append(f"{key}=true")
+                    continue
+                params.append(f"{key}={str(value).replace('#', '')}")
         
         # Add exclude parameter for languages endpoint
         if excluded_languages and endpoint == "languages":
@@ -908,109 +930,91 @@ with tab12:
         st.session_state["gallery_selected_theme"] = chosen_theme
         st.rerun()
 
-# ── Calendar Heatmap Card ─────────────────────────────────────────────
 with tab13:
     st.subheader("📅 Yearly Calendar Heatmap")
-    st.markdown("An enhanced 365-day calendar heatmap with granular level control and custom colors.")
+    st.caption("A 53-week contribution heatmap with selectable intensity mapping and custom colors.")
 
-    # ── Row 1: Intensity + Date Range ────────────────────────────────────
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        hm_level_control = st.selectbox(
-            "Intensity Levels",
+    def _heatmap_theme_palette(theme_name: str, theme: dict) -> list[str]:
+        return contrib_card._palette_from_theme(theme_name, theme)
+
+    from datetime import datetime, timedelta, timezone
+    today = datetime.now(timezone.utc).date()
+
+    control_col1, control_col2 = st.columns(2)
+    with control_col1:
+        intensity_mode = st.selectbox(
+            "Intensity mode",
             ["auto", "none", "low", "medium", "high"],
             index=0,
-            help="auto: 4 levels scaled to data  |  low: active/inactive only  |  none: all empty"
+            key="heatmap_intensity_mode",
         )
-    with col2:
-        heatmap_date_option = st.selectbox(
+    with control_col2:
+        period = st.selectbox(
             "Period",
             ["Last Year", "Current Year", "Custom Range"],
-            index=0
+            index=0,
+            key="heatmap_period",
         )
 
-    # Custom date range inputs (only shown when needed)
+    heatmap_default_colors = _heatmap_theme_palette(selected_theme, current_theme_opts)
+    heatmap_color_cols = st.columns(5)
+    heatmap_colors = {}
+    for index, column in enumerate(heatmap_color_cols):
+        label = ["None", "Low", "Medium", "High", "Max"][index]
+        session_key = f"heatmap_level_{selected_theme}_{index}"
+        with column:
+            heatmap_colors[f"level_{index}"] = st.color_picker(
+                f"Level {index} ({label})",
+                value=heatmap_default_colors[index],
+                key=session_key,
+            )
+
     heatmap_date_range = None
-    if heatmap_date_option == "Custom Range":
-        from datetime import datetime, timedelta, timezone
-        hm_today = datetime.now(timezone.utc).date()
-        cd1, cd2 = st.columns(2)
-        hm_start = cd1.date_input("Start Date", value=hm_today - timedelta(days=364), key="hm_start")
-        hm_end   = cd2.date_input("End Date",   value=hm_today,                       key="hm_end")
+    if period == "Current Year":
         heatmap_date_range = {
-            "start": hm_start.strftime("%Y-%m-%d"),
-            "end":   hm_end.strftime("%Y-%m-%d"),
+            "start": datetime(today.year, 1, 1).date().strftime("%Y-%m-%d"),
+            "end": today.strftime("%Y-%m-%d"),
         }
-    elif heatmap_date_option == "Current Year":
-        from datetime import datetime, timezone
-        hm_today = datetime.now(timezone.utc).date()
+    elif period == "Custom Range":
+        start_col, end_col = st.columns(2)
+        with start_col:
+            custom_start = st.date_input("Start Date", value=today - timedelta(days=180), key="heatmap_custom_start")
+        with end_col:
+            custom_end = st.date_input("End Date", value=today, key="heatmap_custom_end")
         heatmap_date_range = {
-            "start": datetime(hm_today.year, 1, 1).date().strftime("%Y-%m-%d"),
-            "end":   hm_today.strftime("%Y-%m-%d"),
+            "start": custom_start.strftime("%Y-%m-%d"),
+            "end": custom_end.strftime("%Y-%m-%d"),
+        }
+    else:
+        heatmap_date_range = {
+            "start": (today - timedelta(days=365)).strftime("%Y-%m-%d"),
+            "end": today.strftime("%Y-%m-%d"),
         }
 
-    # ── Row 2: Intensity color pickers (always visible, pre-filled with defaults) ──
-    st.markdown("**Intensity Colors** — change any to customise the palette")
-    cc1, cc2, cc3, cc4, cc5 = st.columns(5)
-    hm_color0 = cc1.color_picker("Level 0 (None)",   "#161b22", key="hm_c0")
-    hm_color1 = cc2.color_picker("Level 1 (Low)",    "#0e4429", key="hm_c1")
-    hm_color2 = cc3.color_picker("Level 2 (Med)",    "#006d32", key="hm_c2")
-    hm_color3 = cc4.color_picker("Level 3 (High)",   "#26a641", key="hm_c3")
-    hm_color4 = cc5.color_picker("Level 4 (Max)",    "#39d353", key="hm_c4")
-    hm_level_colors = [hm_color0, hm_color1, hm_color2, hm_color3, hm_color4]
+    svg_bytes = contrib_card.draw_calendar_heatmap_card(
+        data,
+        selected_theme,
+        custom_colors,
+        date_range=heatmap_date_range,
+        intensity_mode=intensity_mode,
+        intensity_colors=heatmap_colors,
+        period_label=period,
+        animations_enabled=animations_enabled,
+    )
 
-    # ── Render live (no button needed) ───────────────────────────────────
-    try:
-        heatmap_svg = contrib_card.draw_calendar_heatmap_card(
-            data,
-            selected_theme,
-            custom_colors or None,
-            date_range=heatmap_date_range,
-            animations_enabled=animations_enabled,
-            level_control=hm_level_control,
-            level_colors=hm_level_colors,
-        )
-
-        hm_col1, hm_col2 = st.columns([1.5, 1])
-        with hm_col1:
-            heatmap_b64 = base64.b64encode(heatmap_svg.encode("utf-8")).decode("utf-8")
-            st.markdown(
-                f'<img src="data:image/svg+xml;base64,{heatmap_b64}" '
-                f'style="max-width:100%; box-shadow:0 4px 6px rgba(0,0,0,0.3); border-radius:10px;"/>',
-                unsafe_allow_html=True
-            )
-            st.download_button(
-                label="⬇️ Download SVG",
-                data=heatmap_svg.encode("utf-8"),
-                file_name=f"calendar_heatmap_{username}.svg",
-                mime="image/svg+xml",
-                use_container_width=True
-            )
-
-        with hm_col2:
-            st.subheader("Integration")
-            hm_params = []
-            if selected_theme != "Default":
-                hm_params.append(f"theme={selected_theme}")
-            for k, v in (custom_colors or {}).items():
-                hm_params.append(f"{k}={v.replace('#', '')}")
-            if heatmap_date_range:
-                hm_params.append(f"start_date={heatmap_date_range['start']}")
-                hm_params.append(f"end_date={heatmap_date_range['end']}")
-            if hm_level_control != "auto":
-                hm_params.append(f"level_control={hm_level_control}")
-            hm_params.append(
-                "level_colors=" + ",".join(c.replace("#", "") for c in hm_level_colors)
-            )
-            hm_params.append("heatmap=true")
-            hm_url = f"https://gitcanvas-api.vercel.app/api/contributions?{'&'.join(hm_params)}&username={username}"
-
-            hm_code = (
-                f'<a href="https://github.com/{username}"><img src="{hm_url}" alt="Calendar Heatmap"/></a>'
-                if output_format == "HTML"
-                else f"![Calendar Heatmap]({hm_url})"
-            )
-            show_code_area(hm_code, label="HTML Code" if output_format == "HTML" else "Markdown Code")
-
-    except Exception as e:
-        st.error(f"Error generating calendar heatmap: {e}")
+    render_tab(
+        svg_bytes,
+        "calendar-heatmap",
+        username,
+        selected_theme,
+        custom_colors,
+        code_template="![Calendar Heatmap]({url})",
+        output_format=output_format,
+        extra_params={
+            "period": period,
+            "intensity_mode": intensity_mode,
+            **heatmap_colors,
+            "start_date": heatmap_date_range["start"],
+            "end_date": heatmap_date_range["end"],
+        },
+    )
