@@ -108,6 +108,36 @@ def get_token_from_header(request: Request) -> Optional[str]:
     return None
 
 
+def _is_local_request(request: Request) -> bool:
+    """Return True when request originates from localhost."""
+    if not request.client:
+        return False
+    return request.client.host in {"127.0.0.1", "::1", "localhost"}
+
+
+def _authorize_cache_clear(request: Request) -> None:
+    """Protect cache-clear endpoints from public access in shared deployments."""
+    settings = get_settings()
+
+    if not settings.cache_clear_enabled:
+        raise HTTPException(status_code=403, detail="Cache clear endpoints are disabled")
+
+    admin_token = settings.cache_clear_admin_token_value()
+    if admin_token:
+        provided = request.headers.get("X-Admin-Token") or get_token_from_header(request)
+        if provided != admin_token:
+            raise HTTPException(status_code=403, detail="Invalid admin token")
+        return
+
+    if settings.cache_clear_allow_localhost_only and _is_local_request(request):
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail="Cache clear is restricted. Configure CACHE_CLEAR_ADMIN_TOKEN or use localhost access.",
+    )
+
+
 @app.get("/")
 def read_root():
     return {"message": "GitCanvas API is running"}
@@ -143,6 +173,19 @@ def parse_custom_overrides(bg_color, title_color, text_color, border_color, font
         validated_font = validate_font(font)
         if validated_font:
             colors["font_family"] = validated_font
+
+    return colors if colors else None
+
+
+def parse_heatmap_colors(level_0, level_1, level_2, level_3, level_4):
+    """Helper to construct heatmap intensity colors with validation."""
+    colors = {}
+    for index, value in enumerate([level_0, level_1, level_2, level_3, level_4]):
+        if not value:
+            continue
+        validated = validate_hex_color(value if str(value).startswith("#") else f"#{value}")
+        if validated:
+            colors[f"level_{index}"] = validated
 
     return colors if colors else None
 
@@ -248,6 +291,57 @@ async def get_contributions(
     
     svg_content = generate_cached_svg(contrib_card.draw_contrib_card, data, theme, custom_colors=custom_colors, date_range=date_range, animations_enabled=animations_enabled)
     return svg_response(svg_content , request)
+
+
+@app.get("/api/calendar-heatmap")
+async def get_calendar_heatmap(
+    request: Request,
+    username: str,
+    theme: str = "Default",
+    period: str = "Last Year",
+    intensity_mode: str = "auto",
+    level_0: Optional[str] = None,
+    level_1: Optional[str] = None,
+    level_2: Optional[str] = None,
+    level_3: Optional[str] = None,
+    level_4: Optional[str] = None,
+    animations_enabled: bool = False,
+    bg_color: Optional[str] = None,
+    title_color: Optional[str] = None,
+    text_color: Optional[str] = None,
+    border_color: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
+    username = validate_username(username)
+    theme = validate_theme(theme)
+    start_date = validate_date(start_date)
+    end_date = validate_date(end_date)
+
+    token = get_token_from_header(request)
+    data = github_api.get_live_github_data(username, token) or github_api.get_mock_data(username)
+    custom_colors = parse_colors(bg_color, title_color, text_color, border_color)
+    heatmap_colors = parse_heatmap_colors(level_0, level_1, level_2, level_3, level_4)
+
+    date_range = None
+    if start_date and end_date:
+        date_range = {
+            "start": start_date,
+            "end": end_date,
+        }
+
+    svg_content = generate_cached_svg(
+        contrib_card.draw_calendar_heatmap_card,
+        data,
+        theme,
+        custom_colors=custom_colors,
+        date_range=date_range,
+        intensity_mode=intensity_mode,
+        intensity_colors=heatmap_colors,
+        period_label=period,
+        animations_enabled=animations_enabled,
+    )
+    return svg_response(svg_content, request)
 
 
 @app.get("/api/recent")
@@ -511,21 +605,23 @@ async def get_cache_statistics():
 
 
 @app.delete("/api/cache/clear")
-async def clear_all_caches():
+async def clear_all_caches(request: Request):
     """
     Clear all caches (GitHub API and SVG caches)
     """
+    _authorize_cache_clear(request)
     return clear_cache()
 
 
 @app.delete("/api/cache/clear/{cache_type}")
-async def clear_specific_cache(cache_type: str):
+async def clear_specific_cache(cache_type: str, request: Request):
     """
     Clear specific cache type
     
     Args:
         cache_type: 'github_api' or 'svg'
     """
+    _authorize_cache_clear(request)
     if cache_type not in ['github_api', 'svg']:
         return {"error": "Invalid cache type. Use 'github_api' or 'svg'"}
     

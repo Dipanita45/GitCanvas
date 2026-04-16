@@ -12,6 +12,11 @@ from config.settings import get_settings
 from roast_widget_streamlit import render_roast_widget
 from generators import stats_card, lang_card, contrib_card, badge_generator, recent_activity_card, streak_card, repo_card, social_card, trophy_card, sparkline
 from utils import github_api
+try:
+    from utils.github_utils import get_rate_limit_status as fetch_rate_limit_status
+except ImportError:
+    def fetch_rate_limit_status(token: str | None = None) -> dict | None:
+        return None
 from utils.cache import clear_cache as clear_ttl_cache
 from themes.styles import THEMES, get_all_themes, CUSTOM_THEMES
 from utils.error_card import draw_error_card
@@ -21,6 +26,7 @@ from generators.visual_elements import (
     sticker_element
 )
 from theme_gallery import render_theme_gallery 
+
 
 
 # Load environment variables
@@ -59,12 +65,30 @@ st.markdown("""
         background: #222;
         border-color: #555;
     }
+
+    /* Keep the long tab row usable on smaller screens */
+    div[data-baseweb="tab-list"] {
+        overflow-x: auto;
+        overflow-y: hidden;
+        flex-wrap: nowrap;
+        scrollbar-width: thin;
+    }
+    div[data-baseweb="tab-list"] button {
+        white-space: nowrap;
+        flex: 0 0 auto;
+    }
+
 </style>
 """, unsafe_allow_html=True)
 
 st.title("GitCanvas: Profile Architect 🛠️")
 st.markdown("### Design your GitHub Stats. Copy the Code. Done.")
 
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_cached_rate_limit_status(token: str | None) -> dict | None:
+    """Cache rate-limit calls to avoid a network hit on every Streamlit rerun."""
+    return fetch_rate_limit_status(token)
 
 
 # --- Sidebar Controls ---
@@ -253,6 +277,33 @@ with st.sidebar:
         type="password",
         help="Paste a token here, or set GITHUB_TOKEN in a .env file in the project root. Sidebar value overrides .env.",
     )
+
+    # Resolve token once so UI status + data loading stay consistent.
+    _github_from_sidebar = (github_token or "").strip()
+    effective_github_token = _github_from_sidebar or _settings.github_token_value()
+
+    # ==================== RATE LIMIT STATUS INDICATOR ====================
+    st.markdown("**Rate Limit Status**")
+
+    rate_info = get_cached_rate_limit_status(effective_github_token or None)
+
+    if rate_info:
+        col1, col2 = st.columns([0.8, 3.2])
+        with col1:
+            st.markdown(f"{rate_info['color']}", unsafe_allow_html=True)
+        with col2:
+            st.markdown(f"**{rate_info['remaining']} / {rate_info['limit']}** remaining")
+
+        st.caption(f"🔄 Resets in **{rate_info['reset_in']}** minutes")
+
+        if rate_info['remaining'] < 200:
+            st.warning("⚠️ Rate limit is getting low. Consider using a token with higher limits.", icon="⚠️")
+    else:
+        if effective_github_token:
+            st.caption("Rate limit status unavailable right now.")
+        else:
+            st.caption("Using anonymous access → **60 requests/hour**")
+    # =====================================================================
     
     # Animation toggle
     animations_enabled = st.checkbox("Enable Animations", value=False, help="Enable SVG animations for cards that support it")
@@ -270,10 +321,6 @@ with st.sidebar:
         st.rerun()
         
     st.info("💡 Tip: Use the 'Icons & Badges' tab to add your tech stack icons!")
-
-# Resolve token for API + caches: sidebar wins, else GITHUB_TOKEN from .env / environment.
-_github_from_sidebar = (github_token or "").strip()
-effective_github_token = _github_from_sidebar or _settings.github_token_value()
 
 # Data Loading
 @st.cache_data(ttl=3600)  # Cache for 1 hour
@@ -344,12 +391,11 @@ elif font_override:
     custom_colors = {"font_family": font_override}
 
 
-# --- Layout: Tabs ---
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
     "Main Stats", "Languages", "Top Repositories", "Contributions",
     "🔥 GitHub Streak", "🔗 Social Links", "Icons & Badges",
     "🔥 AI Roast", "Recent Activity", "✨ Visual Elements",
-    "🏆 Trophy", "🎨 Theme Gallery"    # ← NEW TAB
+    "🏆 Trophy", "🎨 Theme Gallery", "📅 Calendar Heatmap"
 ])
 
 def show_code_area(code_content, label="Markdown Code"):
@@ -453,6 +499,16 @@ def render_tab(svg_bytes, endpoint, username, selected_theme, custom_colors, hid
             params.append(f"theme={selected_theme}")
         for k, v in custom_colors.items():
             params.append(f"{k}={v.replace('#', '')}")
+
+        if extra_params:
+            for key, value in extra_params.items():
+                if value is None or value == "":
+                    continue
+                if isinstance(value, bool):
+                    if value:
+                        params.append(f"{key}=true")
+                    continue
+                params.append(f"{key}={str(value).replace('#', '')}")
         
         # Add exclude parameter for languages endpoint
         if excluded_languages and endpoint == "languages":
@@ -895,3 +951,92 @@ with tab12:
     if chosen_theme:
         st.session_state["gallery_selected_theme"] = chosen_theme
         st.rerun()
+
+with tab13:
+    st.subheader("📅 Yearly Calendar Heatmap")
+    st.caption("A 53-week contribution heatmap with selectable intensity mapping and custom colors.")
+
+    def _heatmap_theme_palette(theme_name: str, theme: dict) -> list[str]:
+        return contrib_card._palette_from_theme(theme_name, theme)
+
+    from datetime import datetime, timedelta, timezone
+    today = datetime.now(timezone.utc).date()
+
+    control_col1, control_col2 = st.columns(2)
+    with control_col1:
+        intensity_mode = st.selectbox(
+            "Intensity mode",
+            ["auto", "none", "low", "medium", "high"],
+            index=0,
+            key="heatmap_intensity_mode",
+        )
+    with control_col2:
+        period = st.selectbox(
+            "Period",
+            ["Last Year", "Current Year", "Custom Range"],
+            index=0,
+            key="heatmap_period",
+        )
+
+    heatmap_default_colors = _heatmap_theme_palette(selected_theme, current_theme_opts)
+    heatmap_color_cols = st.columns(5)
+    heatmap_colors = {}
+    for index, column in enumerate(heatmap_color_cols):
+        label = ["None", "Low", "Medium", "High", "Max"][index]
+        session_key = f"heatmap_level_{selected_theme}_{index}"
+        with column:
+            heatmap_colors[f"level_{index}"] = st.color_picker(
+                f"Level {index} ({label})",
+                value=heatmap_default_colors[index],
+                key=session_key,
+            )
+
+    heatmap_date_range = None
+    if period == "Current Year":
+        heatmap_date_range = {
+            "start": datetime(today.year, 1, 1).date().strftime("%Y-%m-%d"),
+            "end": today.strftime("%Y-%m-%d"),
+        }
+    elif period == "Custom Range":
+        start_col, end_col = st.columns(2)
+        with start_col:
+            custom_start = st.date_input("Start Date", value=today - timedelta(days=180), key="heatmap_custom_start")
+        with end_col:
+            custom_end = st.date_input("End Date", value=today, key="heatmap_custom_end")
+        heatmap_date_range = {
+            "start": custom_start.strftime("%Y-%m-%d"),
+            "end": custom_end.strftime("%Y-%m-%d"),
+        }
+    else:
+        heatmap_date_range = {
+            "start": (today - timedelta(days=365)).strftime("%Y-%m-%d"),
+            "end": today.strftime("%Y-%m-%d"),
+        }
+
+    svg_bytes = contrib_card.draw_calendar_heatmap_card(
+        data,
+        selected_theme,
+        custom_colors,
+        date_range=heatmap_date_range,
+        intensity_mode=intensity_mode,
+        intensity_colors=heatmap_colors,
+        period_label=period,
+        animations_enabled=animations_enabled,
+    )
+
+    render_tab(
+        svg_bytes,
+        "calendar-heatmap",
+        username,
+        selected_theme,
+        custom_colors,
+        code_template="![Calendar Heatmap]({url})",
+        output_format=output_format,
+        extra_params={
+            "period": period,
+            "intensity_mode": intensity_mode,
+            **heatmap_colors,
+            "start_date": heatmap_date_range["start"],
+            "end_date": heatmap_date_range["end"],
+        },
+    )
