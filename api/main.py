@@ -9,6 +9,7 @@ from utils import github_api
 from utils.cache import cache_svg_response, get_cache_stats, clear_cache
 from utils.validators import (
     validate_date,
+    validate_font,
     validate_hex_color,
     validate_limit,
     validate_sort_by,
@@ -111,37 +112,44 @@ def get_token_from_header(request: Request) -> Optional[str]:
 def read_root():
     return {"message": "GitCanvas API is running"}
 
-def parse_colors(bg_color, title_color, text_color, border_color):
-    """Helper to construct custom color dict with validation."""
+def parse_custom_overrides(bg_color, title_color, text_color, border_color, font=None):
+    """
+    Helper to construct custom color + font override dict with validation.
+    font param is validated against allowlist to prevent SVG injection.
+    """
     colors = {}
-    
-    # Validate and add colors
+
     if bg_color:
         validated_bg = validate_hex_color(bg_color)
         if validated_bg:
             colors["bg_color"] = validated_bg
-            
+
     if title_color:
         validated_title = validate_hex_color(title_color)
         if validated_title:
             colors["title_color"] = validated_title
-            
+
     if text_color:
         validated_text = validate_hex_color(text_color)
         if validated_text:
             colors["text_color"] = validated_text
-            
+
     if border_color:
         validated_border = validate_hex_color(border_color)
         if validated_border:
             colors["border_color"] = validated_border
-    
+
+    if font:
+        validated_font = validate_font(font)
+        if validated_font:
+            colors["font_family"] = validated_font
+
     return colors if colors else None
 
 @app.get("/api/stats")
 async def get_stats(
     request: Request,
-    username: str, 
+    username: str,
     theme: str = "Default", 
     hide_stars: bool = False,
     hide_commits: bool = False,
@@ -151,7 +159,8 @@ async def get_stats(
     bg_color: Optional[str] = None,
     title_color: Optional[str] = None,
     text_color: Optional[str] = None,
-    border_color: Optional[str] = None
+    border_color: Optional[str] = None,
+    font: Optional[str] = None,
 ):
     # Validate inputs
     username = validate_username(username)
@@ -169,7 +178,7 @@ async def get_stats(
         "followers": not hide_followers
     }
     
-    custom_colors = parse_colors(bg_color, title_color, text_color, border_color)
+    custom_colors = parse_custom_overrides(bg_color, title_color, text_color, border_color, font)
     svg_content = generate_cached_svg(stats_card.draw_stats_card, data, theme, show_options=show_options, custom_colors=custom_colors, animations_enabled=animations_enabled)
     return svg_response(svg_content , request)
 
@@ -184,14 +193,15 @@ async def get_languages(
     bg_color: Optional[str] = None,
     title_color: Optional[str] = None,
     text_color: Optional[str] = None,
-    border_color: Optional[str] = None
+    border_color: Optional[str] = None,
+    font: Optional[str] = None,
 ):
     # Validate inputs
     username = validate_username(username)
     theme = validate_theme(theme)
     
     data = github_api.get_live_github_data(username) or github_api.get_mock_data(username)
-    custom_colors = parse_colors(bg_color, title_color, text_color, border_color)
+    custom_colors = parse_custom_overrides(bg_color, title_color, text_color, border_color, font)
     
     # Parse exclude parameter into list of languages
     excluded_languages_list = []
@@ -216,7 +226,8 @@ async def get_contributions(
     text_color: Optional[str] = None,
     border_color: Optional[str] = None,
     start_date: Optional[str] = None,
-    end_date: Optional[str] = None
+    end_date: Optional[str] = None,
+    font: Optional[str] = None,
 ):
     # Validate inputs
     username = validate_username(username)
@@ -225,7 +236,7 @@ async def get_contributions(
     end_date = validate_date(end_date)
     
     data = github_api.get_live_github_data(username) or github_api.get_mock_data(username)
-    custom_colors = parse_colors(bg_color, title_color, text_color, border_color)
+    custom_colors = parse_custom_overrides(bg_color, title_color, text_color, border_color, font)
     
     # Build date_range dict if dates are provided
     date_range = None
@@ -247,7 +258,8 @@ async def get_recent(
     bg_color: Optional[str] = None,
     title_color: Optional[str] = None,
     text_color: Optional[str] = None,
-    border_color: Optional[str] = None
+    border_color: Optional[str] = None,
+    font: Optional[str] = None,
 ):
     # Validate inputs
     username = validate_username(username)
@@ -257,7 +269,7 @@ async def get_recent(
     # This prevents token exposure in logs, browser history, and proxy logs
     token = get_token_from_header(request)
     
-    custom_colors = parse_colors(bg_color, title_color, text_color, border_color)
+    custom_colors = parse_custom_overrides(bg_color, title_color, text_color, border_color, font)
     svg_content = recent_activity_card.draw_recent_activity_card({'username': username}, theme, custom_colors=custom_colors, token=token)
     return svg_response(svg_content, request)
 
@@ -270,14 +282,15 @@ async def get_trophy(
     bg_color: Optional[str] = None,
     title_color: Optional[str] = None,
     text_color: Optional[str] = None,
-    border_color: Optional[str] = None
+    border_color: Optional[str] = None,
+    font: Optional[str] = None,
 ):
     # Validate inputs
     username = validate_username(username)
     theme = validate_theme(theme)
     
     data = github_api.get_live_github_data(username) or github_api.get_mock_data(username)
-    custom_colors = parse_colors(bg_color, title_color, text_color, border_color)
+    custom_colors = parse_custom_overrides(bg_color, title_color, text_color, border_color, font)
     svg_content = trophy_card.draw_trophy_card(data, theme, custom_colors=custom_colors)
     return svg_response(svg_content, request)
 
@@ -290,14 +303,15 @@ async def get_streak(
     bg_color: Optional[str] = None,
     title_color: Optional[str] = None,
     text_color: Optional[str] = None,
-    border_color: Optional[str] = None
+    border_color: Optional[str] = None,
+    font: Optional[str] = None,
 ):
     # Validate inputs
     username = validate_username(username)
     theme = validate_theme(theme)
     
     data = github_api.get_live_github_data(username) or github_api.get_mock_data(username)
-    custom_colors = parse_colors(bg_color, title_color, text_color, border_color)
+    custom_colors = parse_custom_overrides(bg_color, title_color, text_color, border_color, font)
     svg_content = streak_card.draw_streak_card(data, theme, custom_colors=custom_colors)
     return svg_response(svg_content, request)
 
@@ -312,7 +326,8 @@ async def get_repos(
     bg_color: Optional[str] = None,
     title_color: Optional[str] = None,
     text_color: Optional[str] = None,
-    border_color: Optional[str] = None
+    border_color: Optional[str] = None,
+    font: Optional[str] = None,
 ):
     # Validate inputs
     username = validate_username(username)
@@ -321,7 +336,7 @@ async def get_repos(
     limit = validate_limit(limit, min_val=1, max_val=10)
     
     data = github_api.get_live_github_data(username) or github_api.get_mock_data(username)
-    custom_colors = parse_colors(bg_color, title_color, text_color, border_color)
+    custom_colors = parse_custom_overrides(bg_color, title_color, text_color, border_color, font)
     svg_content = repo_card.draw_repo_card(data, theme, custom_colors=custom_colors, sort_by=sort_by, limit=limit)
     return svg_response(svg_content, request)
 
@@ -340,10 +355,11 @@ async def get_social_card(
     bg_color: Optional[str] = None,
     title_color: Optional[str] = None,
     text_color: Optional[str] = None,
-    border_color: Optional[str] = None
+    border_color: Optional[str] = None,
+    font: Optional[str] = None,
 ):
     theme = validate_theme(theme)
-    custom_colors = parse_colors(bg_color, title_color, text_color, border_color)
+    custom_colors = parse_custom_overrides(bg_color, title_color, text_color, border_color, font)
 
     if icon_color:
         icon_color = validate_hex_color(icon_color)
