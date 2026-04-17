@@ -6,7 +6,6 @@ import json
 
 # HEX color regex validation pattern
 HEX_COLOR_REGEX = re.compile(r'^#[0-9A-Fa-f]{6}$')
-import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from config.settings import get_settings
 from roast_widget_streamlit import render_roast_widget
@@ -413,6 +412,12 @@ def show_code_area(code_content, label="Markdown Code"):
     st.markdown(f"**{label}** (Copy below)")
     st.text_area(label, value=code_content, height=100, label_visibility="collapsed")
 
+
+def render_embedded_html(html_content: str, *, height: int) -> None:
+    """Render inline HTML via iframe to avoid deprecated st.components.v1.html."""
+    html_b64 = base64.b64encode(html_content.encode("utf-8")).decode("ascii")
+    st.iframe(f"data:text/html;base64,{html_b64}", height=height, scrolling=False)
+
 def render_tab(svg_bytes, endpoint, username, selected_theme, custom_colors, hide_params=None, code_template=None, excluded_languages=None, output_format="Markdown", font_override=None, extra_params=None):
     col1, col2 = st.columns([1.5, 1])
     with col1:
@@ -433,7 +438,7 @@ def render_tab(svg_bytes, endpoint, username, selected_theme, custom_colors, hid
         svg_b64 = base64.b64encode(svg_bytes.encode("utf-8")).decode("utf-8")
         filename_prefix_safe = json.dumps(f"{endpoint}_{username}")
 
-        components.html(f"""
+        render_embedded_html(f"""
         <div style="display:flex; flex-direction:column; gap:8px; margin-top:4px;">
             <button onclick="downloadSVGAs('png')" style="
                 width:100%; padding:8px; font-size:14px; cursor:pointer;
@@ -619,7 +624,7 @@ with tab1:
 
     with spark_col1:
         # We wrap it in a component so the animations and styles actually trigger
-        st.components.v1.html(f"""
+        render_embedded_html(f"""
             <div style="background: {current_theme_opts.get('bg_color', '#0d1117')}; border-radius: 12px; border: 1px solid {current_theme_opts.get('border_color', '#30363d')}; overflow: hidden; position: relative; margin-bottom: 5px;">
                 <!-- Corner Accents -->
                 <div style="position: absolute; top: 0; left: 0; width: 10px; height: 10px; border-top: 2px solid {theme_color}; border-left: 2px solid {theme_color};"></div>
@@ -884,7 +889,7 @@ with tab8:
     st.markdown("Let AI roast your GitHub profile with humor!")
     
     if username:
-        render_roast_widget(username)
+        render_roast_widget(username, profile_data=data)
     else:
         st.warning("Please enter a GitHub username in the sidebar.")
 
