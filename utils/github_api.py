@@ -107,7 +107,12 @@ def calculate_streak_data(contributions):
 @cache_github_api
 def fetch_github_graphql(username, token=None):
     if not token:
-        token = token or st.secrets.get("GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+        try:
+            token = st.secrets.get("GITHUB_TOKEN")
+        except Exception:
+            token = None
+        if not token:
+            token = os.getenv("GITHUB_TOKEN")
     if not token:
         return None
 
@@ -241,7 +246,12 @@ def get_github_headers(token=None):
     }
 
     if not token:
-        token = token or st.secrets.get("GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+        try:
+            token = st.secrets.get("GITHUB_TOKEN")
+        except Exception:
+            token = None
+        if not token:
+            token = os.getenv("GITHUB_TOKEN")
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
@@ -593,7 +603,15 @@ def get_github_actions_data(username, token=None):
         Dict with actions statistics or None if no data available
     """
     if not token:
-        token = token or st.secrets.get("GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+        # Try to get token from streamlit secrets or environment
+        try:
+            token = st.secrets.get("GITHUB_TOKEN")
+        except Exception:
+            # Secrets file not found or not accessible
+            token = None
+        
+        if not token:
+            token = os.getenv("GITHUB_TOKEN")
     
     if not token:
         logger.warning(f"GitHub token required to fetch Actions data for {username}")
