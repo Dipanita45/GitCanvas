@@ -1,4 +1,5 @@
 import streamlit as st  # type: ignore
+import streamlit.components.v1 as components
 import base64
 import os
 import re
@@ -344,6 +345,18 @@ def load_data(user, token=None, use_mock=False, _cache_version="v3"):  # bump wh
             return None
     return d
 
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_actions_data(user, token=None, use_mock=False, _cache_version="v1"):
+    d = github_api.get_github_actions_data(user, token)
+    if not d:
+        if use_mock:
+            st.warning("Actions API limits/errors reached. Using mock data (Dev/Test mode).")
+            d = github_api.get_mock_actions_data(user)
+        else:
+            return None
+    return d
+
 data = load_data(username if username else "torvalds", effective_github_token or None, use_mock_data)
 
 # Show token warning only if no token is available from ANY source (env, secrets, sidebar)
@@ -401,11 +414,12 @@ elif font_override:
     custom_colors = {"font_family": font_override}
 
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14 = st.tabs([
     "Main Stats", "Languages", "Top Repositories", "Contributions",
     "🔥 GitHub Streak", "🔗 Social Links", "Icons & Badges",
     "🔥 AI Roast", "Recent Activity", "✨ Visual Elements",
-    "🏆 Trophy", "🎨 Theme Gallery", "📅 Calendar Heatmap"
+    "🏆 Trophy", "🎨 Theme Gallery", "📅 Calendar Heatmap",
+    "⚙️ GitHub Actions"
 ])
 
 def show_code_area(code_content, label="Markdown Code"):
@@ -414,9 +428,8 @@ def show_code_area(code_content, label="Markdown Code"):
 
 
 def render_embedded_html(html_content: str, *, height: int) -> None:
-    """Render inline HTML via iframe to avoid deprecated st.components.v1.html."""
-    html_b64 = base64.b64encode(html_content.encode("utf-8")).decode("ascii")
-    st.iframe(f"data:text/html;base64,{html_b64}", height=height, scrolling=False)
+    """Render inline HTML using Streamlit's components API."""
+    components.html(html_content, height=height, scrolling=False)
 
 def render_tab(svg_bytes, endpoint, username, selected_theme, custom_colors, hide_params=None, code_template=None, excluded_languages=None, output_format="Markdown", font_override=None, extra_params=None):
     col1, col2 = st.columns([1.5, 1])
@@ -1069,3 +1082,37 @@ with tab13:
             "end_date": heatmap_date_range["end"],
         },
     )
+
+with tab14:
+    st.subheader("⚙️ GitHub Actions")
+    st.caption("Workflow run totals, success rate, and recent runs from GitHub Actions.")
+
+    if not effective_github_token:
+        st.warning(
+            "A GitHub token is required for live Actions data. Enable mock data for a local preview, or add a token in the sidebar."
+        )
+
+    actions_data = load_actions_data(username if username else "torvalds", effective_github_token or None, use_mock_data)
+
+    if actions_data:
+        col1, col2 = st.columns([1.5, 1])
+
+        with col1:
+            svg_bytes = actions_card.draw_actions_card(actions_data, selected_theme, custom_colors, animations_enabled=animations_enabled)
+            b64 = base64.b64encode(svg_bytes.encode("utf-8")).decode("utf-8")
+            st.markdown(
+                f'<img src="data:image/svg+xml;base64,{b64}" style="max-width: 100%; box-shadow: 0 4px 6px rgba(0,0,0,0.3); border-radius: 10px;"/>',
+                unsafe_allow_html=True,
+            )
+
+        with col2:
+            st.subheader("API Usage")
+            st.caption("This endpoint requires an Authorization header, so it cannot be embedded as a normal public README image URL.")
+            example_url = f"https://gitcanvas-api.vercel.app/api/actions?username={username}&theme={selected_theme}"
+            curl_example = (
+                "curl -H \"Authorization: Bearer YOUR_GITHUB_TOKEN\" "
+                f'"{example_url}"'
+            )
+            show_code_area(curl_example, label="Curl Example")
+    else:
+        st.warning("No GitHub Actions data could be loaded for this account.")
